@@ -3,10 +3,19 @@ import pandas as pd
 import numpy as np
 import pickle
 import os
-from rdkit import Chem
-from rdkit.Chem import Descriptors, Crippen, AllChem, rdFingerprintGenerator
 import warnings
 warnings.filterwarnings('ignore')
+
+from chem_utils import (
+    BASES,
+    LIGANDS,
+    ADDITIVES,
+    validate_smiles,
+    get_molecular_descriptors,
+    get_fingerprint_bits,
+    generate_product_smiles,
+    build_scaled_descriptor_row,
+)
 
 st.set_page_config(
     page_title="Buchwald-Hartwig Optimizer",
@@ -125,44 +134,10 @@ st.markdown("""
 # Model / feature-engineering artifacts — v3: descriptors + Morgan
 # fingerprints (see notebooks 05_model_v2_fixed_descriptors.ipynb
 # and 06_model_v3_fingerprints.ipynb for the full history:
-# v1 R²=0.30 -> v2 R²=0.72 -> v3 R²=0.93)
+# v1 R²=0.30 -> v2 R²=0.72 -> v3 R²=0.93). The actual chemistry/
+# feature-engineering functions live in chem_utils.py, unit-tested in
+# tests/test_chem_utils.py.
 # ============================================================
-
-BASES = ['P2Et', 'BTMG', 'MTBD']
-LIGANDS = ['XPhos', 't-BuXPhos', 't-BuBrettPhos', 'AdBrettPhos']
-ADDITIVES = [
-    '3,5-dimethylisoxazole', '3-methyl-5-phenylisoxazole',
-    '3-methylisoxazole', '3-phenylisoxazole', '4-phenylisoxazole',
-    '5-(2,6-difluorophenyl)isoxazole', '5-Phenyl-1,2,4-oxadiazole',
-    '5-methyl-3-(1H-pyrrol-1-yl)isoxazole', '5-methylisoxazole',
-    '5-phenylisoxazole', 'N,N-dibenzylisoxazol-3-amine',
-    'N,N-dibenzylisoxazol-5-amine', 'No_Additive',
-    'benzo[c]isoxazole', 'benzo[d]isoxazole',
-    'ethyl-3-methoxyisoxazole-5-carboxylate',
-    'ethyl-3-methylisoxazole-5-carboxylate',
-    'ethyl-5-methylisoxazole-3-carboxylate',
-    'ethyl-5-methylisoxazole-4-carboxylate',
-    'ethyl-isoxazole-3-carboxylate',
-    'ethyl-isoxazole-4-carboxylate',
-    'methyl-5-(furan-2-yl)isoxazole-3-carboxylate',
-    'methyl-5-(thiophen-2-yl)isoxazole-3-carboxylate',
-    'methyl-isoxazole-5-carboxylate'
-]
-
-FP_BITS = 128
-FP_RADIUS = 2
-_MORGAN_GEN = rdFingerprintGenerator.GetMorganGenerator(radius=FP_RADIUS, fpSize=FP_BITS)
-
-# Reaction templates for generating the coupling product from the two
-# user-supplied substrates. Halide reactivity in Pd-catalyzed amination
-# is I/Br >> Cl, so we try the more reactive halide first and only fall
-# back to Cl if there is no Br/I in the molecule.
-_RXN_PRIORITY = AllChem.ReactionFromSmarts(
-    '[c:1][Br,I:2].[NX3;H1,H2;!$(N=*);!$(N-C(=O)):3]>>[c:1][N:3]'
-)
-_RXN_FALLBACK_CL = AllChem.ReactionFromSmarts(
-    '[c:1][Cl:2].[NX3;H1,H2;!$(N=*);!$(N-C(=O)):3]>>[c:1][N:3]'
-)
 
 
 @st.cache_resource
@@ -188,132 +163,6 @@ def load_artifacts():
         feature_names_v3 = pickle.load(f)
 
     return model, scaler, feature_names_v2, feature_names_v3
-
-
-def validate_smiles(smiles):
-    """Validate SMILES string"""
-    if not smiles or smiles.strip() == '':
-        return False
-    mol = Chem.MolFromSmiles(smiles.strip())
-    return mol is not None and mol.GetNumAtoms() > 0
-
-
-def get_molecular_descriptors(smiles):
-    """Extract molecular descriptors from a SMILES string.
-
-    This mirrors the fixed function from
-    05_model_v2_fixed_descriptors.ipynb — v1 silently produced None for
-    every molecule here because of two RDKit API mistakes
-    (FractionCsp3 -> FractionCSP3, NumAromaticAtoms doesn't exist),
-    which meant the deployed model never used any substrate structure
-    information at all.
-    """
-    try:
-        if smiles is None or smiles == '':
-            return None
-        mol = Chem.MolFromSmiles(str(smiles).strip())
-        if mol is None or mol.GetNumAtoms() == 0:
-            return None
-        return {
-            'mw': Descriptors.MolWt(mol),
-            'logp': Crippen.MolLogP(mol),
-            'hbd': Descriptors.NumHDonors(mol),
-            'hba': Descriptors.NumHAcceptors(mol),
-            'rotatable_bonds': Descriptors.NumRotatableBonds(mol),
-            'aromatic_rings': Descriptors.NumAromaticRings(mol),
-            'num_atoms': mol.GetNumAtoms(),
-            'num_heavy_atoms': Descriptors.HeavyAtomCount(mol),
-            'tpsa': Descriptors.TPSA(mol),
-            'molar_refractivity': Crippen.MolMR(mol),
-            'fsp3': Descriptors.FractionCSP3(mol),
-            'num_aromatic_atoms': sum(1 for a in mol.GetAtoms() if a.GetIsAromatic()),
-            'num_heteroatoms': Descriptors.NumHeteroatoms(mol),
-            'num_heterocycles': (Descriptors.NumAromaticHeterocycles(mol)
-                                  + Descriptors.NumSaturatedHeterocycles(mol)
-                                  + Descriptors.NumAliphaticHeterocycles(mol)),
-            'num_saturated_rings': Descriptors.NumSaturatedRings(mol),
-            'num_aliphatic_rings': Descriptors.NumAliphaticRings(mol),
-            'num_valence_electrons': Descriptors.NumValenceElectrons(mol),
-            'formal_charge': Chem.GetFormalCharge(mol),
-            'num_explicit_hs': sum(a.GetNumExplicitHs() for a in mol.GetAtoms()),
-            'num_radical_electrons': Descriptors.NumRadicalElectrons(mol),
-        }
-    except Exception as e:
-        st.warning(f"Descriptor computation failed for SMILES={smiles!r}: {e}")
-        return None
-
-
-def get_fingerprint_bits(smiles, prefix):
-    """Morgan fingerprint (radius=2, 128 bits) as a named feature dict,
-    e.g. {'aryl_fp_0': 0, 'aryl_fp_1': 1, ...}."""
-    arr = np.zeros(FP_BITS, dtype=int)
-    mol = Chem.MolFromSmiles(str(smiles).strip())
-    if mol is not None:
-        fp = _MORGAN_GEN.GetFingerprint(mol)
-        for i in fp.GetOnBits():
-            arr[i] = 1
-    return {f'{prefix}_fp_{i}': int(v) for i, v in enumerate(arr)}
-
-
-def generate_product_smiles(aryl_smiles, amine_smiles):
-    """Generate the C-N coupling product from the aryl halide + amine.
-
-    Tries the more reactive halide (Br/I) first; falls back to Cl only
-    if the molecule has no Br/I. This is a simplification (it assumes a
-    single reactive halide and a single reactive N-H), which is a fair
-    assumption for the simple substrates this dataset/demo uses, but
-    won't be correct for every possible input structure.
-    """
-    aryl_mol = Chem.MolFromSmiles(aryl_smiles.strip())
-    amine_mol = Chem.MolFromSmiles(amine_smiles.strip())
-    if aryl_mol is None or amine_mol is None:
-        return None
-
-    products = _RXN_PRIORITY.RunReactants((aryl_mol, amine_mol))
-    if not products:
-        products = _RXN_FALLBACK_CL.RunReactants((aryl_mol, amine_mol))
-    if not products:
-        return None
-
-    for p in products:
-        mol = p[0]
-        try:
-            Chem.SanitizeMol(mol)
-            return Chem.MolToSmiles(mol)
-        except Exception:
-            continue
-    return None
-
-
-def build_scaled_descriptor_row(aryl_desc, product_desc, base, ligand, additive, scaler, feature_names_v2):
-    """Build the 71-column scaled descriptor+categorical block for one
-    base/ligand/additive combination.
-
-    Important subtlety: the StandardScaler (scaler_v2.pkl) was fit on
-    the RAW (un-sanitized) column names — e.g. 'additive_benzo[c]isoxazole'
-    with brackets — while the trained model's feature names are the
-    sanitized versions (brackets replaced with '_', required by
-    XGBoost). The column ORDER is identical between the two; only those
-    two additive names differ in spelling. So we build the raw-named
-    row, scale it using the scaler's own column order, and only then
-    relabel the columns to the sanitized names the model expects.
-    """
-    raw = {}
-    for k, v in aryl_desc.items():
-        raw[f'aryl_{k}'] = v
-    for k, v in product_desc.items():
-        raw[f'product_{k}'] = v
-    for b in BASES:
-        raw[f'base_{b}'] = 1 if b == base else 0
-    for l in LIGANDS:
-        raw[f'ligand_{l}'] = 1 if l == ligand else 0
-    for add in ADDITIVES:
-        raw[f'additive_{add}'] = 1 if add == additive else 0
-
-    raw_names = list(scaler.feature_names_in_)
-    row = pd.DataFrame([raw]).reindex(columns=raw_names, fill_value=0)
-    scaled = scaler.transform(row)
-    return pd.DataFrame(scaled, columns=feature_names_v2)
 
 
 def generate_pdf_report(results_df, aryl_smiles, amine_smiles, top_n=10):
