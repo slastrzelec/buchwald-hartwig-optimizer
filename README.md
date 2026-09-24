@@ -78,3 +78,7 @@ CI runs this same suite automatically on every push and pull request to `main` (
 ## Data source
 
 Trained on the Buchwald-Hartwig HTE (high-throughput experimentation) dataset of C–N coupling yields across combinations of aryl halides, amines, bases, ligands and isoxazole additives.
+
+## License
+
+MIT License.

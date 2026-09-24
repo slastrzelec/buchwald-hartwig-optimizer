@@ -1,2 +1,0 @@
-czyszczenie oryginalnych danych 
-aplikacja kozysta z danych wcześniej wyczyszczonych 
