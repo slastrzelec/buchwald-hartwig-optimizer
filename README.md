@@ -1,6 +1,6 @@
 # 🧪 Buchwald-Hartwig C-N Coupling Optimizer
 
-[![Tests](https://github.com/slastrzelec/06_reaction_opt/actions/workflows/tests.yml/badge.svg)](https://github.com/slastrzelec/06_reaction_opt/actions/workflows/tests.yml)
+[![Tests](https://github.com/slastrzelec/buchwald-hartwig-optimizer/actions/workflows/tests.yml/badge.svg)](https://github.com/slastrzelec/buchwald-hartwig-optimizer/actions/workflows/tests.yml)
 
 A machine-learning tool that predicts the yield of Buchwald-Hartwig C-N cross-coupling reactions for a user-supplied aryl halide + amine, across 288 combinations of base, ligand and additive — helping chemists shortlist promising reaction conditions before running them on the bench.
 
@@ -43,7 +43,7 @@ The deployed app itself had a second, separate bug fixed later: it validated the
 ## Project structure
 
 ```
-06_reaction_opt/
+buchwald-hartwig-optimizer/
 ├── app.py                              # Streamlit app (UI, prediction loop, PDF export)
 ├── chem_utils.py                       # Chemistry/feature-engineering logic (unit-tested, no Streamlit dependency)
 ├── tests/
@@ -60,8 +60,8 @@ The deployed app itself had a second, separate bug fixed later: it validated the
 ## Running locally
 
 ```bash
-git clone https://github.com/slastrzelec/06_reaction_opt.git
-cd 06_reaction_opt
+git clone https://github.com/slastrzelec/buchwald-hartwig-optimizer.git
+cd buchwald-hartwig-optimizer
 pip install -r requirements.txt
 streamlit run app.py
 ```
